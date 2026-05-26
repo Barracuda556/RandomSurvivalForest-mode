@@ -419,7 +419,7 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
             )
 
         # Передаем важные данные
-        builder.build(self.tree_, X, y_numeric, sample_weight, missing_values_in_feature_mask, importance_matrix=None)
+        builder.build(self.tree_, X, y_numeric, sample_weight, missing_values_in_feature_mask, importance_matrix=importance_matrix)
  
         return self
 

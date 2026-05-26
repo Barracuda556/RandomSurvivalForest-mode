@@ -242,7 +242,6 @@ class LogrankCriterion:
         weighted_at_risk = self._weighted_n_left
         numer = 0.0
         denom = 0.0
-        print('Standart LogRank')
         
         for i in range(self.n_unique_times):
             # События в левой ветви
@@ -275,7 +274,7 @@ class LogrankCriterion:
             # indicates that this node cannot be split
             return -np.inf
     
-    def impurity_improvement(self, impurity_parent, impurity_left, impurity_right):
+    def impurity_improvement(self, impurity_parent, impurity_left, impurity_right, importance_array=None):
         """Compute the improvement in impurity."""
         return self.proxy_impurity_improvement()
     
@@ -385,13 +384,13 @@ class LogrankCriterion:
 class WeightLogrankCriterion:
     """Weight log-rank criterion for survival tree splitting."""
     
-    def __init__(self, n_outputs, n_samples, unique_times, is_event_time):#, importance_array):
+    def __init__(self, n_outputs, n_samples, unique_times, is_event_time, importance_matrix=None):
         self.n_outputs = n_outputs
         self.n_samples = n_samples
         self.unique_times = unique_times
         self.is_event_time = is_event_time
         self.n_unique_times = len(unique_times)
-        self.importance_array = None
+        self.importance_matrix = importance_matrix
         #self.importance_array = importance_array
         
         # Initialize riskset counter
@@ -541,29 +540,39 @@ class WeightLogrankCriterion:
         
         return 0
     
-    def proxy_impurity_improvement(self, importance_array):
+    def proxy_impurity_improvement(self, importance_array=None):
         """Compute a proxy of the impurity reduction.
         
         Возвращает абсолютное значение log-rank статистики.
         """
-        if importance_array is None:
+        # Use importance_matrix if importance_array is None
+        if importance_array is None and hasattr(self, 'importance_matrix') and self.importance_matrix is not None:
+            # Важно: получаем вектор для текущего признака из матрицы
+            # Это предполагает, что splitter передает правильный importance_array
+            # Но в данном случае мы можем использовать и self.importance_matrix, если splitter не передал
+            # Для простоты берем entire importance matrix if splitter hasn't specified array
+            # Но splitter будет передавать specific feature array
+            pass
+        elif importance_array is None:
             importance_array = np.ones(self.n_unique_times)
-            
+
+        if importance_array is not None:
+            weight_importance = importance_array
+        else:
+            weight_importance = np.ones(self.n_unique_times)
+
         # Добавить проверку размерности
-        if len(importance_array) != self.n_unique_times:
-            raise ValueError(f"importance_array length {len(importance_array)} "
+        if len(weight_importance) != self.n_unique_times:
+            raise ValueError(f"importance_array length {len(weight_importance)} "
                             f"does not match n_unique_times {self.n_unique_times}")
         
-        self.importance_array = importance_array
         weighted_at_risk = self._weighted_n_left # Y_1j
         numer = 0.0
         denom = 0.0
         
         for i in range(self.n_unique_times):
-
-            weight_importance = self.importance_array[i]
-
-            weight = 1 + weight_importance
+            weight_val = weight_importance[i]
+            weight = 1.0 + weight_val
             
             # События в левой ветви
             events_left = self.weighted_n_events_left[i]
@@ -594,16 +603,8 @@ class WeightLogrankCriterion:
         else:  # all samples are censored
             # indicates that this node cannot be split
             return -np.inf
-        
-        #if denom != 0.0:
-        #    # Абсолютное значение log-rank статистики
-        #    #return abs(numer / math.sqrt(abs(denom)))
-        #    return numer**2 / denom
-        #else:  # all samples are censored
-        #    # indicates that this node cannot be split
-        #    return -np.inf
     
-    def impurity_improvement(self, impurity_parent, impurity_left, impurity_right, importance_array):
+    def impurity_improvement(self, impurity_parent, impurity_left, impurity_right, importance_array=None):
         """Compute the improvement in impurity."""
         return self.proxy_impurity_improvement(importance_array)
     

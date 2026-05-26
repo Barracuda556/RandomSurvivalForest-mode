@@ -279,9 +279,11 @@ def node_split_best(splitter, partitioner, criterion, split, parent_record, impo
         # f_j in the interval [n_total_constants, f_i[
         current_split.feature = features[f_j]
 
+        # --- ИСПРАВЛЕНО: Получение importance_array из аргумента функции ---
         if importance_matrix is not None:
-            importance_array = importance_matrix[features[f_j],:]
-        else: importance_array = None
+            importance_array = importance_matrix[features[f_j],:] if f_j < importance_matrix.shape[0] else None
+        else: 
+            importance_array = None
         
         partitioner.sort_samples_and_feature_values(current_split.feature)
         n_missing = partitioner.n_missing
@@ -358,10 +360,7 @@ def node_split_best(splitter, partitioner, criterion, split, parent_record, impo
                     raise ValueError(f"importance_array length mismatch: got {len(importance_array)}, "
                                     f"expected {criterion.n_unique_times}")
 
-                if hasattr(criterion, 'importance_matrix') and criterion.importance_matrix is not None:
-                    current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
-                else:
-                    current_proxy_improvement = criterion.proxy_impurity_improvement()
+                current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
 
                 #if hasattr(criterion, 'proxy_impurity_improvement'):
                 #    if importance_array is not None:
@@ -411,15 +410,12 @@ def node_split_best(splitter, partitioner, criterion, split, parent_record, impo
                         raise ValueError(f"importance_array length mismatch: got {len(importance_array)}, "
                                         f"expected {criterion.n_unique_times}")
 
-                    if hasattr(criterion, 'importance_matrix') and criterion.importance_matrix is not None:
-                        # Получаем importance_array для текущего признака
-                        if hasattr(splitter, 'importance_matrix') and splitter.importance_matrix is not None:
-                            importance_array = splitter.importance_matrix[current_split.feature, :]
-                        else:
-                            importance_array = np.ones(criterion.n_unique_times)
-                        current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
+                    if importance_matrix is not None:
+                        importance_array = importance_matrix[current_split.feature, :]
                     else:
-                        current_proxy_improvement = criterion.proxy_impurity_improvement()
+                        importance_array = np.ones(criterion.n_unique_times)
+
+                    current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
                     
                     #if hasattr(criterion, 'proxy_impurity_improvement'):
                     #    if importance_array is not None:
@@ -547,7 +543,8 @@ def node_split_random(splitter, partitioner, criterion, split, parent_record, im
         
         if importance_matrix is not None:
             importance_array = importance_matrix[features[f_j],:]
-        else: importance_array = None
+        else: 
+            importance_array = None
 
         # Find min, max as we will randomly select a threshold between them
         min_feature_value, max_feature_value = partitioner.find_min_max(current_split.feature)
@@ -622,15 +619,7 @@ def node_split_random(splitter, partitioner, criterion, split, parent_record, im
             raise ValueError(f"importance_array length mismatch: got {len(importance_array)}, "
                             f"expected {criterion.n_unique_times}")
 
-        if hasattr(criterion, 'importance_matrix') and criterion.importance_matrix is not None:
-            # Получаем importance_array для текущего признака
-            if hasattr(splitter, 'importance_matrix') and splitter.importance_matrix is not None:
-                importance_array = splitter.importance_matrix[current_split.feature, :]
-            else:
-                importance_array = np.ones(criterion.n_unique_times)
-            current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
-        else:
-            current_proxy_improvement = criterion.proxy_impurity_improvement()
+        current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
 
         #if hasattr(criterion, 'proxy_impurity_improvement'):
         #    if importance_array is not None:

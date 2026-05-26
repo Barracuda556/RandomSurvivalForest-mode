@@ -11,7 +11,6 @@ from sklearn.ensemble._forest import (
     _accumulate_prediction,
     _generate_unsampled_indices,
     _get_n_samples_bootstrap,
-    _parallel_build_trees,
 )
 
 from sklearn.utils._tags import get_tags
@@ -19,8 +18,8 @@ from sklearn.utils.validation import check_is_fitted, check_random_state, valida
 from sksurv.base import SurvivalAnalysisMixin
 from sksurv.docstrings import append_cumulative_hazard_example, append_survival_function_example
 from sksurv.metrics import concordance_index_censored
-#from sksurv.tree._criterion import get_unique_times
-from sksurv.util import check_array_survival
+
+from sksurv.util import check_array_survival 
 
 from sksurv_importance._criterion import get_unique_times
 from sksurv_importance.tree import _array_to_step_function
@@ -48,6 +47,67 @@ def _sklearn_tags_patch(self):
 BaseForest.__sklearn_tags__ = _sklearn_tags_patch
 
 
+# ============================================================================= 
+# Кастомная функция для построения одного дерева с importance_matrix
+# ============================================================================= 
+# ============================================================================= 
+# Кастомная функция для построения одного дерева
+# --- NEW --- Добавлен новый аргумент importance_splines
+# --- NEW --- Теперь функция строит матрицу значимости для каждого дерева на лету
+# --- NEW --- Упрощенная версия, матрица не нужна при передаче, только сплайны ---
+def _build_single_tree(
+    tree,
+    X,
+    y_tree, 
+    sample_weight,
+    random_state,
+    n_samples_bootstrap,
+    missing_values_in_feature_mask,
+    importance_splines, # --- NEW ---
+):
+    """
+    Build a single survival tree, optionally with importance_splines.
+    """
+    # 1. Распаковываем y_tree
+    y_numeric = y_tree[0]
+    unique_times_ = y_tree[1]
+    is_event_time_ = y_tree[2]
+
+    # 2. Сохраняем важные данные в дерево (это критически важно!)
+    tree.unique_times_ = unique_times_
+    tree.is_event_time_ = is_event_time_
+    
+    # --- NEW --- Передаем не матрицу, а словарь сплайнов. Матрица будет построена внутри tree.fit
+    tree.importance_splines = importance_splines
+
+    # 3. Если bootstrap=True, делаем выборку
+    if n_samples_bootstrap is not None:
+        sample_indices = random_state.randint(0, X.shape[0], n_samples_bootstrap)
+        X_bootstrap = X[sample_indices]
+        y_bootstrap = y_numeric[sample_indices]
+        if sample_weight is not None:
+            sample_weight_bootstrap = sample_weight[sample_indices]
+        else:
+            sample_weight_bootstrap = None
+    else:
+        X_bootstrap = X
+        y_bootstrap = y_numeric
+        sample_weight_bootstrap = sample_weight
+
+    # 4. Обучаем дерево
+    # --- NEW --- Важно: передаем importance_splines, а не importance_matrix
+    tree.fit(
+        X_bootstrap,
+        y_bootstrap,
+        sample_weight=sample_weight_bootstrap,
+        check_input=False,
+        missing_values_in_feature_mask=missing_values_in_feature_mask,
+        importance_splines=importance_splines # --- NEW ---
+    )
+    
+    return tree
+
+
 class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
     """
     Base class for forest-based estimators for survival analysis.
@@ -70,7 +130,7 @@ class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
         verbose=0,
         warm_start=False,
         max_samples=None,
-        importance_matrix=None,
+        importance_splines=None,
     ):
         super().__init__(
             estimator,
@@ -85,6 +145,8 @@ class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
             class_weight=None,
             max_samples=max_samples,
         )
+
+        self.importance_splines = importance_splines
 
     @property
     def feature_importances_(self):
@@ -109,6 +171,11 @@ class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
         self
         """
         self._validate_params()
+
+        if self.importance_splines is not None:
+            if not isinstance(self.importance_splines, dict):
+                raise ValueError("importance_splines must be a dictionary mapping feature names to splines.")
+ 
 
         X = validate_data(self, X, dtype=DTYPE, accept_sparse="csc", ensure_min_samples=2, ensure_all_finite=False)
         event, time = check_array_survival(X, y)
@@ -173,9 +240,6 @@ class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
 
             trees = [self._make_estimator(append=False, random_state=random_state) for i in range(n_more_estimators)]
 
-            for tree in trees:
-                tree.importance_matrix = self.importance_matrix
-
             y_tree = (
                 y_numeric,
                 self.unique_times_,
@@ -187,18 +251,17 @@ class _BaseSurvivalForest(BaseForest, metaclass=ABCMeta):
             # that case. However, for joblib 0.12+ we respect any
             # parallel_backend contexts set at a higher level,
             # since correctness does not rely on using threads.
+            # ИСПРАВЛЕНО: Используем _build_single_tree вместо _parallel_build_trees
             trees = Parallel(n_jobs=self.n_jobs, verbose=self.verbose, prefer="threads")(
-                delayed(_parallel_build_trees)(
+                delayed(_build_single_tree)(
                     t,
-                    self.bootstrap,
                     X,
                     y_tree,
                     sample_weight,
-                    i,
-                    len(trees),
-                    verbose=self.verbose,
-                    n_samples_bootstrap=n_samples_bootstrap,
-                    missing_values_in_feature_mask=missing_values_in_feature_mask,
+                    random_state,
+                    n_samples_bootstrap,
+                    missing_values_in_feature_mask,
+                    self.importance_splines,
                 )
                 for i, t in enumerate(trees)
             )
@@ -503,7 +566,7 @@ class RandomSurvivalForest(SurvivalAnalysisMixin, _BaseSurvivalForest):
         warm_start=False,
         max_samples=None,
         low_memory=False,
-        importance_matrix=None,
+        importance_splines=None,
     ):
         super().__init__(
             estimator=SurvivalTree(),
@@ -525,6 +588,7 @@ class RandomSurvivalForest(SurvivalAnalysisMixin, _BaseSurvivalForest):
             verbose=verbose,
             warm_start=warm_start,
             max_samples=max_samples,
+            importance_splines=importance_splines,
         )
 
         self.max_depth = max_depth
@@ -534,7 +598,7 @@ class RandomSurvivalForest(SurvivalAnalysisMixin, _BaseSurvivalForest):
         self.max_features = max_features
         self.max_leaf_nodes = max_leaf_nodes
         self.low_memory = low_memory
-        self.importance_matrix = importance_matrix
+        self.importance_splines = importance_splines
 
     @append_cumulative_hazard_example(estimator_mod="ensemble", estimator_class="RandomSurvivalForest")
     def predict_cumulative_hazard_function(self, X, return_array=False):

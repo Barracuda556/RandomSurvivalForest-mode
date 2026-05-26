@@ -197,7 +197,7 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
         random_state=None,
         max_leaf_nodes=None,
         low_memory=False,
-        importance_matrix=False,
+        importance_splines=False,
     ):
         self.splitter = splitter
         self.max_depth = max_depth
@@ -208,7 +208,7 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
         self.random_state = random_state
         self.max_leaf_nodes = max_leaf_nodes
         self.low_memory = low_memory
-        self.importance_matrix = importance_matrix
+        self.importance_splines = importance_splines
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
@@ -258,7 +258,8 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
         missing_values_in_feature_mask = _any_isnan_axis0(X)
         return missing_values_in_feature_mask
 
-    def fit(self, X, y, sample_weight=None, check_input=True):
+    def fit(self, X, y, sample_weight=None, check_input=True, importance_splines=None, missing_values_in_feature_mask=None):
+ 
         """Build a survival tree from the training set (X, y).
 
         If ``splitter='best'``, `X` is allowed to contain missing
@@ -285,15 +286,25 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
         -------
         self
         """
-        self._fit(X, y, sample_weight, check_input)
-        return self
+        if importance_splines is not None:
+            self.importance_splines  = importance_splines 
+        else:
+            self.importance_splines = None
+        
+        if missing_values_in_feature_mask is not None:
+            self.missing_values_in_feature_mask = missing_values_in_feature_mask
+            
+        # Для основного вызова check_input=True, для параллельного — check_input=False
+        return self._fit(X, y, sample_weight, check_input, importance_splines=importance_splines)
 
-    def _fit(self, X, y, sample_weight=None, check_input=True, missing_values_in_feature_mask=None):
+    def _fit(self, X, y, sample_weight=None, check_input=True, missing_values_in_feature_mask=None, importance_splines=None):
         random_state = check_random_state(self.random_state)
 
         if check_input:
+            # --- ПЕРВЫЙ РЕЖИМ: полный fit от пользователя ---
+            # X, y, sample_weight — это оригинальные данные
             X = validate_data(self, X, dtype=DTYPE, ensure_min_samples=2, accept_sparse="csc", ensure_all_finite=False)
-            event, time = check_array_survival(X, y)
+            event, time = check_array_survival(X, y) # Это требует структурированного y
             time = time.astype(np.float64)
             self.unique_times_, self.is_event_time_ = get_unique_times(time, event)
             missing_values_in_feature_mask = self._compute_missing_values_in_feature_mask(X)
@@ -304,33 +315,65 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
             y_numeric[:, 0] = time
             y_numeric[:, 1] = event.astype(np.float64)
         else:
-            y_numeric, self.unique_times_, self.is_event_time_ = y
+            # --- ВТОРОЙ РЕЖИМ: fit для bootstrap выборки (от _build_single_tree) ---
+            # y - это y_numeric, а не структурированный массив
+            y_numeric = y
+            #unique_times_ и is_event_time_ должны быть сохранены в self из основного fit
+            # Но они не передаются, поэтому их нужно передавать отдельно
+            # Для простоты возвращаемся к идее, что мы должны сохранить их в self
+            pass
 
+        # Общая часть для обоих режимов
         n_samples, self.n_features_in_ = X.shape
         params = self._check_params(n_samples)
 
         if self.low_memory:
-            self.n_outputs_ = 1  # В оригинале для low_memory n_outputs = 1
-            # one "class" only, for the sum over the CHF
+            self.n_outputs_ = 1
             self.n_classes_ = np.ones(self.n_outputs_, dtype=np.intp)
         else:
+            if not hasattr(self, 'unique_times_') or self.unique_times_ is None:
+                raise ValueError("unique_times_ must be set in check_input=True mode")
             self.n_outputs_ = self.unique_times_.shape[0]
-            # one "class" for CHF, one for survival function
             self.n_classes_ = np.ones(self.n_outputs_, dtype=np.intp) * 2
 
-        # Build tree
-        if self.importance_matrix is not None:
-            criterion = WeightLogrankCriterion(self.n_outputs_, n_samples, self.unique_times_, self.is_event_time_)
-            # Передаем importance_matrix через setattr или другой механизм
-            criterion.importance_matrix = self.importance_matrix
+        if importance_splines is not None:
+            self.importance_splines = importance_splines
+
+        if hasattr(self, 'importance_splines') and self.importance_splines is not None:
+            n_features = X.shape[1]
+            n_times = len(self.unique_times_)
+            importance_matrix = np.zeros((n_features, n_times), dtype=np.float64)
+
+            # Получаем имена признаков. Для pandas это X.columns, для numpy — фейковые имена
+            if hasattr(X, 'columns'):
+                feature_names = X.columns.tolist()
+            else:
+                feature_names = [f"feature_{i}" for i in range(n_features)]
+
+            for feat_idx, feat_name in enumerate(feature_names):
+                if feat_name in self.importance_splines:
+                    spl = self.importance_splines[feat_name]
+                    importance_matrix[feat_idx, :] = spl(self.unique_times_)
+                else:
+                    importance_matrix[feat_idx, :] = 1.0
+        else:
+            importance_matrix = None
+        # --- END NEW ---
+
+        # --- NEW --- ПЕРЕДАЧА importance_matrix в критерий (вместо self.importance_matrix) ---
+        if importance_matrix is not None:
+            criterion = WeightLogrankCriterion(
+                self.n_outputs_, n_samples, self.unique_times_, self.is_event_time_, 
+                importance_matrix=importance_matrix
+            )
         else:
             criterion = LogrankCriterion(self.n_outputs_, n_samples, self.unique_times_, self.is_event_time_)
-        #if self.importance_matrix is not None:
-        #    criterion = WeightLogrankCriterion(self.n_outputs_, n_samples, self.unique_times_, self.is_event_time_)#, self.importance_array)
-        #else:
-        #    criterion = LogrankCriterion(self.n_outputs_, n_samples, self.unique_times_, self.is_event_time_)
+ 
+        # ВАЖНО: Получаем данные о времени из атрибутов, установленных в check_input=True
+        # (если check_input=False, они должны быть уже установлены)
+        unique_times_ = self.unique_times_
+        is_event_time_ = self.is_event_time_
 
-        # ВАЖНО: Используем наши собственные сплиттеры вместо sklearn
         if issparse(X):
             if self.splitter == "best":
                 splitter_class = BestSparseSplitter
@@ -342,7 +385,7 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
             else:  # "random"
                 splitter_class = RandomSplitter
         
-        # Создаем сплиттер напрямую, не через словарь
+        # Создаем сплиттер напрямую
         splitter = splitter_class(
             criterion,
             self.max_features_,
@@ -375,8 +418,9 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
                 0.0,  # min_impurity_decrease
             )
 
-        builder.build(self.tree_, X, y_numeric, sample_weight, missing_values_in_feature_mask, self.importance_matrix)
-
+        # Передаем важные данные
+        builder.build(self.tree_, X, y_numeric, sample_weight, missing_values_in_feature_mask, importance_matrix=None)
+ 
         return self
 
     def _check_params(self, n_samples):

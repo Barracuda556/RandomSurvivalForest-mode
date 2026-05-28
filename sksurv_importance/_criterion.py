@@ -572,7 +572,7 @@ class WeightLogrankCriterion:
         
         for i in range(self.n_unique_times):
             weight_val = weight_importance[i]
-            weight = 1.0 + weight_val
+            weight = 1 + weight_val
             
             # События в левой ветви
             events_left = self.weighted_n_events_left[i]

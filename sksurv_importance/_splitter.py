@@ -281,8 +281,12 @@ def node_split_best(splitter, partitioner, criterion, split, parent_record, impo
 
         # --- ИСПРАВЛЕНО: Получение importance_array из аргумента функции ---
         if importance_matrix is not None:
-            importance_array = importance_matrix[features[f_j],:] if f_j < importance_matrix.shape[0] else None
-        else: 
+            feat_idx = features[f_j]
+            if 0 <= feat_idx < importance_matrix.shape[0]:
+                importance_array = importance_matrix[feat_idx, :].copy()
+            else:
+                importance_array = np.ones(criterion.n_unique_times, dtype=np.float64)
+        else:
             importance_array = None
         
         partitioner.sort_samples_and_feature_values(current_split.feature)
@@ -411,9 +415,13 @@ def node_split_best(splitter, partitioner, criterion, split, parent_record, impo
                                         f"expected {criterion.n_unique_times}")
 
                     if importance_matrix is not None:
-                        importance_array = importance_matrix[current_split.feature, :]
+                        feat_idx = features[f_j]
+                        if 0 <= feat_idx < importance_matrix.shape[0]:
+                            importance_array = importance_matrix[feat_idx, :].copy()
+                        else:
+                            importance_array = np.ones(criterion.n_unique_times, dtype=np.float64)
                     else:
-                        importance_array = np.ones(criterion.n_unique_times)
+                        importance_array = None
 
                     current_proxy_improvement = criterion.proxy_impurity_improvement(importance_array)
                     
@@ -542,8 +550,12 @@ def node_split_random(splitter, partitioner, criterion, split, parent_record, im
         current_split.feature = features[f_j]
         
         if importance_matrix is not None:
-            importance_array = importance_matrix[features[f_j],:]
-        else: 
+            feat_idx = features[f_j]
+            if 0 <= feat_idx < importance_matrix.shape[0]:
+                importance_array = importance_matrix[feat_idx, :].copy()
+            else:
+                importance_array = np.ones(criterion.n_unique_times, dtype=np.float64)
+        else:
             importance_array = None
 
         # Find min, max as we will randomly select a threshold between them

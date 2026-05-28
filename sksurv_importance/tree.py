@@ -342,20 +342,21 @@ class SurvivalTree(BaseEstimator, SurvivalAnalysisMixin):
         if hasattr(self, 'importance_splines') and self.importance_splines is not None:
             n_features = X.shape[1]
             n_times = len(self.unique_times_)
-            importance_matrix = np.zeros((n_features, n_times), dtype=np.float64)
+            importance_matrix = np.ones((n_features, n_times), dtype=np.float64)  # default = 1.0
 
-            # Получаем имена признаков. Для pandas это X.columns, для numpy — фейковые имена
+            # Надёжное получение имён признаков
             if hasattr(X, 'columns'):
-                feature_names = X.columns.tolist()
+                feature_names = list(X.columns)
             else:
                 feature_names = [f"feature_{i}" for i in range(n_features)]
 
             for feat_idx, feat_name in enumerate(feature_names):
                 if feat_name in self.importance_splines:
                     spl = self.importance_splines[feat_name]
-                    importance_matrix[feat_idx, :] = spl(self.unique_times_)
-                else:
-                    importance_matrix[feat_idx, :] = 1.0
+                    try:
+                        importance_matrix[feat_idx, :] = spl(self.unique_times_)
+                    except Exception:
+                        importance_matrix[feat_idx, :] = 1.0
         else:
             importance_matrix = None
         # --- END NEW ---
